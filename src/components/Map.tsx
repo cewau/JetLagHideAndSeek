@@ -6,7 +6,12 @@ import { useStore } from "@nanostores/react";
 import * as turf from "@turf/turf";
 import * as L from "leaflet";
 import { useEffect, useMemo, useRef } from "react";
-import { MapContainer, ScaleControl, TileLayer } from "react-leaflet";
+import {
+    AttributionControl,
+    MapContainer,
+    ScaleControl,
+    TileLayer,
+} from "react-leaflet";
 import { toast } from "react-toastify";
 
 import {
@@ -44,6 +49,11 @@ import { MapPrint } from "./MapPrint";
 import { PolygonDraw } from "./PolygonDraw";
 import { SimulatedSeekerTimer } from "./SimulatedSeekerTimerAnim";
 // VizPOIs moved to OptionDrawers bottom bar
+
+const STREET_ATTRIBUTION =
+    '<a href="https://leafletjs.com/">Leaflet</a> | &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors; &copy; <a href="https://carto.com/attributions">CARTO</a>; &copy; <a href="http://www.thunderforest.com/">Thunderforest</a>; Powered by Esri and Turf.js';
+const SATELLITE_ATTRIBUTION =
+    '<a href="https://leafletjs.com/">Leaflet</a> | Imagery &copy; <a href="https://www.esri.com/">Esri</a>, Vantor, Earthstar Geographics, and the GIS User Community<br>Boundaries and labels &copy; Esri, HERE, Garmin, OpenStreetMap contributors, and the GIS user community';
 
 export const Map = ({ className }: { className?: string }) => {
     useStore(additionalMapGeoLocations);
@@ -208,8 +218,12 @@ export const Map = ({ className }: { className?: string }) => {
             <MapContainer
                 center={$mapGeoLocation.geometry.coordinates}
                 zoom={12}
-                className={cn("w-[500px] h-[500px]", className)}
+                className={cn(
+                    "w-[500px] h-[500px]",
+                    className,
+                )}
                 ref={leafletMapContext.set}
+                attributionControl={false}
                 // @ts-ignore Typing doesn't update from react-contextmenu
                 contextmenu={true}
                 contextmenuWidth={140}
@@ -318,14 +332,14 @@ export const Map = ({ className }: { className?: string }) => {
                 {$mapTileStyle === "satellite" && (
                     <>
                         <TileLayer
-                            attribution='Tiles &copy; <a href="https://www.esri.com/">Esri</a> &mdash; Source: Esri, Vantor, Earthstar Geographics, and the GIS User Community'
+                            key="satellite-imagery"
                             url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
                             maxZoom={22}
                             minZoom={2}
                             noWrap
                         />
                         <TileLayer
-                            attribution='Boundaries and labels &copy; Esri, HERE, Garmin, OpenStreetMap contributors, and the GIS user community'
+                            key="satellite-reference"
                             url="https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}"
                             maxZoom={22}
                             minZoom={2}
@@ -336,7 +350,7 @@ export const Map = ({ className }: { className?: string }) => {
                 {$mapTileStyle === "street" &&
                     !($highlightTrainLines && $thunderforestApiKey) && (
                     <TileLayer
-                        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors; &copy; <a href="https://carto.com/attributions">CARTO</a>; &copy; <a href="http://www.thunderforest.com/">Thunderforest</a>; Powered by Esri and Turf.js'
+                        key="street-voyager"
                         url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
                         subdomains="abcd"
                         maxZoom={20} // This technically should be 6, but once the ratelimiting starts this can take over
@@ -348,8 +362,8 @@ export const Map = ({ className }: { className?: string }) => {
                     $highlightTrainLines &&
                     $thunderforestApiKey && (
                     <TileLayer
+                        key="street-transport"
                         url={`https://tile.thunderforest.com/transport/{z}/{x}/{y}.png?apikey=${$thunderforestApiKey}`}
-                        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors; &copy; <a href="https://carto.com/attributions">CARTO</a>; &copy; <a href="http://www.thunderforest.com/">Thunderforest</a>; Powered by Esri and Turf.js'
                         maxZoom={22}
                         minZoom={2}
                         noWrap
@@ -364,6 +378,19 @@ export const Map = ({ className }: { className?: string }) => {
                 </div>
                 {/* <PolygonDraw /> */}
                 <ScaleControl position="bottomleft" />
+                <AttributionControl
+                    key={$mapTileStyle}
+                    position={
+                        $mapTileStyle === "satellite"
+                            ? "bottomleft"
+                            : "bottomright"
+                    }
+                    prefix={
+                        $mapTileStyle === "satellite"
+                            ? SATELLITE_ATTRIBUTION
+                            : STREET_ATTRIBUTION
+                    }
+                />
                 <MapPrint
                     position="topright"
                     sizeModes={["Current", "A4Portrait", "A4Landscape"]}
