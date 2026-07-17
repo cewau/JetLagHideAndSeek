@@ -14,7 +14,7 @@ import {
     triggerLocalRefresh,
 } from "@/lib/context";
 import type { ICON_COLORS } from "@/maps/api";
-import { findAdminBoundary,nearestToQuestion } from "@/maps/api";
+import { findAdminBoundary, nearestToQuestion } from "@/maps/api";
 
 import { LatitudeLongitude } from "./LatLngPicker";
 import {
@@ -89,31 +89,42 @@ const ColoredMarker = ({
                             const q = (questions.get() || []).find(
                                 (qq: any) => qq.key === questionKey,
                             );
-                            if (!q || (q.id !== "matching" && q.id !== "measuring") || q.data.type === "coastline") {
+                            if (
+                                !q ||
+                                (q.id !== "matching" && q.id !== "measuring") ||
+                                q.data.type === "coastline"
+                            ) {
                                 try {
                                     e.target.closeTooltip();
                                 } catch {}
                                 setHoverText(null);
                                 return;
-                            };
+                            }
                             // If it's a matching question with a matching endpoint, compute nearest place
                             // nearestToQuestion returns a turf point with properties populated
                             // compute nearest
                             let nearest;
-                            if(q.data.type == "zone" || q.data.type == "electoral-boundary") {
-                                nearest = await findAdminBoundary(q.data.lat, q.data.lng, 5);
-                            }else{
+                            if (
+                                q.data.type == "zone" ||
+                                q.data.type == "electoral-boundary"
+                            ) {
+                                nearest = await findAdminBoundary(
+                                    q.data.lat,
+                                    q.data.lng,
+                                    5,
+                                );
+                            } else {
                                 nearest = await nearestToQuestion(q.data);
                             }
                             if (nearest && nearest.properties) {
-                                    const name =
-                                        nearest.properties["name:en"] ||
-                                        nearest.properties.name ||
-                                        nearest.properties.Name ||
-                                        nearest.properties.ED_DESC ||
-                                        nearest.properties.ED_DESC_FU ||
-                                        "Matched Entity";
-                                    setHoverText(name);
+                                const name =
+                                    nearest.properties["name:en"] ||
+                                    nearest.properties.name ||
+                                    nearest.properties.Name ||
+                                    nearest.properties.ED_DESC ||
+                                    nearest.properties.ED_DESC_FU ||
+                                    "Matched Entity";
+                                setHoverText(name);
                                 setTimeout(() => {
                                     try {
                                         e.target.openTooltip();
@@ -133,7 +144,7 @@ const ColoredMarker = ({
                         }
                     },
                     mouseout: (e) => {
-                        if(isDragging) return;
+                        if (isDragging) return;
                         try {
                             e.target.closeTooltip();
                         } catch {}
@@ -311,7 +322,7 @@ export const DraggableMarkers = () => {
                         return (
                             <Fragment key={question.key}>
                                 <ColoredMarker
-                                    color={question.data.colorA}
+                                    color="green"
                                     key={"a" + question.key.toString()}
                                     questionKey={question.key}
                                     sub="Start"
@@ -326,7 +337,7 @@ export const DraggableMarkers = () => {
                                     }}
                                 />
                                 <ColoredMarker
-                                    color={question.data.colorB}
+                                    color="red"
                                     key={"b" + question.key.toString()}
                                     questionKey={question.key}
                                     sub="End"
