@@ -26,6 +26,7 @@ import {
     sendPhotoAnswer,
     shouldNotifyAnsweredQuestion,
     showPushConfirmation,
+    submittedQuestionKeys,
     syncHiderModeForRole,
     unaskQuestion,
 } from "@/game/multiplayer";
@@ -106,6 +107,8 @@ describe("multiplayer answer helpers", () => {
         const answered: GameQuestion = {
             ...pending,
             id: "answered-map",
+            clientQuestionKey: 3,
+            question: { ...structuredClone(radius), key: 3 },
             status: "answered",
             answer: { type: "radius", within: false },
         };
@@ -151,8 +154,9 @@ describe("multiplayer answer helpers", () => {
             "another-seeker",
         );
         expect(sharedSeekerMap).toMatchObject([
-            { id: "radius", data: { within: true } },
-            { id: "radius", data: { within: false } },
+            { id: "radius", key: 1, data: { drag: true, within: true } },
+            { id: "radius", key: 1, data: { drag: false, within: true } },
+            { id: "radius", key: 3, data: { drag: false, within: false } },
         ]);
 
         const originatingSeekerMap = selectMapQuestions(
@@ -163,8 +167,61 @@ describe("multiplayer answer helpers", () => {
             "seeker",
         );
         expect(originatingSeekerMap).toMatchObject([
-            { id: "radius", data: { within: false } },
+            { id: "radius", key: 1, data: { drag: false, within: true } },
+            { id: "radius", key: 3, data: { drag: false, within: false } },
         ]);
+    });
+
+    it("syncs every submitted pending question to every seeker as locked authoritative state", () => {
+        const submittedByAnotherSeeker: GameQuestion = {
+            id: "shared-pending",
+            senderPlayerId: "seeker-one",
+            clientQuestionKey: 9,
+            question: {
+                ...structuredClone(radius),
+                key: 9,
+            },
+            status: "pending",
+            answer: null,
+            createdAt: "2026-07-17T00:00:00.000Z",
+            answeredAt: null,
+        };
+        const snapshot: GameSnapshot = {
+            game: {
+                code: "ABC234",
+                createdAt: "2026-07-17T00:00:00.000Z",
+            },
+            players: [
+                { id: "seeker-one", name: "One", role: "seeker" },
+                { id: "seeker-two", name: "Two", role: "seeker" },
+            ],
+            questions: [submittedByAnotherSeeker],
+        };
+
+        const sidebar = selectSidebarQuestions(
+            "seeker",
+            [radius],
+            snapshot,
+            "seeker-two",
+        );
+        expect(sidebar).toEqual([
+            { source: "local", question: radius },
+            { source: "remote", gameQuestion: submittedByAnotherSeeker },
+        ]);
+
+        const mapQuestions = selectMapQuestions(
+            "seeker",
+            [radius],
+            snapshot,
+            {},
+            "seeker-two",
+        );
+        expect(mapQuestions).toHaveLength(2);
+        expect(mapQuestions[1]).toMatchObject({
+            key: 9,
+            data: { drag: false },
+        });
+        expect(mapQuestions[1]).not.toBe(submittedByAnotherSeeker.question);
     });
 
     it("prevents sending a stale answer while automatic calculation is running", () => {
@@ -213,11 +270,11 @@ describe("multiplayer answer helpers", () => {
             "blocked",
         );
         expect(questionSubmissionState(snapshot, "seeker-two", 3)).toBe(
-            "ready",
+            "blocked",
         );
     });
 
-    it("lets only the originating seeker change a pending geographic result", () => {
+    it("locks submitted geographic pins while preserving owner-only pending result edits", () => {
         const pending: GameQuestion = {
             id: "pending-own",
             senderPlayerId: "seeker-one",
@@ -246,6 +303,10 @@ describe("multiplayer answer helpers", () => {
         };
 
         expect(canEditPendingQuestionResult(session, pending)).toBe(true);
+        expect([...submittedQuestionKeys(snapshot, "seeker-one")]).toEqual([1]);
+        expect([...submittedQuestionKeys(snapshot, "another-seeker")]).toEqual(
+            [],
+        );
         expect(
             canEditPendingQuestionResult(
                 {
@@ -261,9 +322,15 @@ describe("multiplayer answer helpers", () => {
                 status: "answered",
             }),
         ).toBe(false);
-        expect(
-            selectMapQuestions("seeker", [], snapshot, {}, "seeker-one"),
-        ).toEqual([pending.question]);
+        const lockedMapQuestion = selectMapQuestions(
+            "seeker",
+            [],
+            snapshot,
+            {},
+            "seeker-one",
+        )[0];
+        expect(lockedMapQuestion).toMatchObject({ data: { drag: false } });
+        expect(lockedMapQuestion).not.toBe(pending.question);
     });
 
     it("notifies every seeker when a pending question is answered", () => {

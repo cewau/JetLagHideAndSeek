@@ -135,6 +135,17 @@ export function selectSidebarQuestions(
     return [...localItems, ...remoteQuestions];
 }
 
+export function submittedQuestionKeys(
+    snapshot: GameSnapshot | null,
+    playerId: string | undefined,
+) {
+    return new Set(
+        (snapshot?.questions ?? [])
+            .filter((item) => item.senderPlayerId === playerId)
+            .map((item) => item.clientQuestionKey),
+    );
+}
+
 export function canEditPendingQuestionResult(
     session: GameSession | null,
     item: GameQuestion,
@@ -161,46 +172,21 @@ export function selectMapQuestions(
         if (role !== "seeker" || !snapshot || !playerId)
             return localGeographicQuestions;
 
-        const ownAnsweredKeys = new Set(
-            snapshot.questions
-                .filter(
-                    (item) =>
-                        item.senderPlayerId === playerId &&
-                        item.status === "answered" &&
-                        item.answer,
-                )
-                .map((item) => item.clientQuestionKey),
+        const ownSubmittedKeys = submittedQuestionKeys(snapshot, playerId);
+        const localDrafts = localGeographicQuestions.filter(
+            (question) => !ownSubmittedKeys.has(question.key),
         );
-        const localDraftsAndPending = localGeographicQuestions.filter(
-            (question) => !ownAnsweredKeys.has(question.key),
-        );
-        const localKeys = new Set(
-            localGeographicQuestions.map((question) => question.key),
-        );
-        const ownRemotePending = snapshot.questions.flatMap((item) => {
-            if (
-                item.senderPlayerId !== playerId ||
-                item.status !== "pending" ||
-                item.question.id === "photo" ||
-                localKeys.has(item.clientQuestionKey)
-            )
-                return [];
-            return [item.question];
+        const authoritativeQuestions = snapshot.questions.flatMap((item) => {
+            if (item.question.id === "photo") return [];
+            const question =
+                item.status === "answered" && item.answer
+                    ? applyAnswer(item.question, item.answer)
+                    : cloneQuestion(item.question);
+            if ("drag" in question.data)
+                Object.assign(question.data, { drag: false });
+            return [question];
         });
-        const authoritativeAnswers = snapshot.questions.flatMap((item) => {
-            if (
-                item.question.id === "photo" ||
-                item.status !== "answered" ||
-                !item.answer
-            )
-                return [];
-            return [applyAnswer(item.question, item.answer)];
-        });
-        return [
-            ...localDraftsAndPending,
-            ...ownRemotePending,
-            ...authoritativeAnswers,
-        ];
+        return [...localDrafts, ...authoritativeQuestions];
     }
     if (!snapshot) return [];
     return snapshot.questions.flatMap((item) => {
@@ -221,14 +207,14 @@ export function questionSubmissionState(
     playerId: string,
     clientQuestionKey: number,
 ): QuestionSubmissionState {
-    const ownQuestions = (snapshot?.questions ?? []).filter(
-        (item) => item.senderPlayerId === playerId,
-    );
-    const current = ownQuestions.find(
-        (item) => item.clientQuestionKey === clientQuestionKey,
+    const snapshotQuestions = snapshot?.questions ?? [];
+    const current = snapshotQuestions.find(
+        (item) =>
+            item.senderPlayerId === playerId &&
+            item.clientQuestionKey === clientQuestionKey,
     );
     if (current) return current.status;
-    return ownQuestions.some((item) => item.status === "pending")
+    return snapshotQuestions.some((item) => item.status === "pending")
         ? "blocked"
         : "ready";
 }

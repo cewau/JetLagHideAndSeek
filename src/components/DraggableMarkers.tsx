@@ -6,6 +6,11 @@ import { Marker, Tooltip } from "react-leaflet";
 
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import {
+    gameSession,
+    gameSnapshot,
+    submittedQuestionKeys,
+} from "@/game/multiplayer";
+import {
     autoSave,
     hiderMode,
     questionModified,
@@ -35,6 +40,7 @@ const ColoredMarker = ({
     color,
     onChange,
     questionKey,
+    submitted = false,
     sub = "",
 }: {
     onChange: (event: DragEndEvent) => void;
@@ -42,6 +48,7 @@ const ColoredMarker = ({
     longitude: number;
     color: keyof typeof ICON_COLORS;
     questionKey: number;
+    submitted?: boolean;
     sub?: string;
 }) => {
     const $questions = useStore(questions);
@@ -51,7 +58,12 @@ const ColoredMarker = ({
     const [hoverText, setHoverText] = useState<string | null>(null);
 
     return (
-        <Dialog open={open} onOpenChange={setOpen}>
+        <Dialog
+            open={!submitted && open}
+            onOpenChange={(nextOpen) => {
+                if (!submitted) setOpen(nextOpen);
+            }}
+        >
             <Marker
                 position={[latitude, longitude]}
                 icon={
@@ -67,19 +79,21 @@ const ColoredMarker = ({
                           })
                         : undefined
                 }
-                draggable={true}
+                draggable={!submitted}
                 eventHandlers={{
                     dragstart: () => {
+                        if (submitted) return;
                         isDragging = true;
                     },
                     dragend: (x) => {
+                        if (submitted) return;
                         onChange(x);
                         setTimeout(() => {
                             isDragging = false;
                         }, 100);
                     },
                     click: () => {
-                        if (!isDragging) {
+                        if (!submitted && !isDragging) {
                             setOpen(true);
                         }
                     },
@@ -96,7 +110,9 @@ const ColoredMarker = ({
                             ) {
                                 try {
                                     e.target.closeTooltip();
-                                } catch {}
+                                } catch {
+                                    // The marker may already be detached from the map.
+                                }
                                 setHoverText(null);
                                 return;
                             }
@@ -128,7 +144,9 @@ const ColoredMarker = ({
                                 setTimeout(() => {
                                     try {
                                         e.target.openTooltip();
-                                    } catch {}
+                                    } catch {
+                                        // The marker may already be detached from the map.
+                                    }
                                 }, 0);
                             } else {
                                 setHoverText("Matched Entity");
@@ -136,18 +154,22 @@ const ColoredMarker = ({
                                 setTimeout(() => {
                                     try {
                                         e.target.openTooltip();
-                                    } catch {}
+                                    } catch {
+                                        // The marker may already be detached from the map.
+                                    }
                                 }, 0);
                             }
-                        } catch (err) {
-                            // ignore it but don't crash the UI
+                        } catch {
+                            // Hover lookup failures should not crash the map UI.
                         }
                     },
                     mouseout: (e) => {
                         if (isDragging) return;
                         try {
                             e.target.closeTooltip();
-                        } catch {}
+                        } catch {
+                            // The marker may already be detached from the map.
+                        }
                         setHoverText(null);
                     },
                 }}
@@ -261,6 +283,12 @@ export const DraggableMarkers = () => {
     useStore(triggerLocalRefresh);
     const $questions = useStore(questions);
     const $hiderMode = useStore(hiderMode);
+    const $gameSession = useStore(gameSession);
+    const $gameSnapshot = useStore(gameSnapshot);
+    const submittedKeys = submittedQuestionKeys(
+        $gameSnapshot,
+        $gameSession?.player.id,
+    );
 
     return (
         <Fragment>
@@ -296,6 +324,7 @@ export const DraggableMarkers = () => {
                 //     question.data.type === "custom-zone"
                 // )
                 //     return null;
+                const submitted = submittedKeys.has(question.key);
 
                 switch (question.id) {
                     case "radius":
@@ -307,6 +336,7 @@ export const DraggableMarkers = () => {
                                 color={question.data.color}
                                 key={question.key}
                                 questionKey={question.key}
+                                submitted={submitted}
                                 latitude={question.data.lat}
                                 longitude={question.data.lng}
                                 onChange={(e) => {
@@ -325,6 +355,7 @@ export const DraggableMarkers = () => {
                                     color="green"
                                     key={"a" + question.key.toString()}
                                     questionKey={question.key}
+                                    submitted={submitted}
                                     sub="Start"
                                     latitude={question.data.latA}
                                     longitude={question.data.lngA}
@@ -340,6 +371,7 @@ export const DraggableMarkers = () => {
                                     color="red"
                                     key={"b" + question.key.toString()}
                                     questionKey={question.key}
+                                    submitted={submitted}
                                     sub="End"
                                     latitude={question.data.latB}
                                     longitude={question.data.lngB}

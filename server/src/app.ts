@@ -273,6 +273,19 @@ function parseJson<T>(value: unknown): T | null {
     return JSON.parse(value) as T;
 }
 
+function ensurePendingQuestionIndex(db: DatabaseSync) {
+    const duplicatePendingGame = db
+        .prepare(
+            "SELECT game_id FROM questions WHERE status = 'pending' GROUP BY game_id HAVING COUNT(*) > 1 LIMIT 1",
+        )
+        .get();
+    if (duplicatePendingGame) return;
+    db.exec(`
+        CREATE UNIQUE INDEX IF NOT EXISTS one_pending_question_per_game
+            ON questions(game_id) WHERE status = 'pending';
+    `);
+}
+
 function migrate(db: DatabaseSync) {
     db.exec(`
         PRAGMA foreign_keys = ON;
@@ -349,8 +362,7 @@ function migrate(db: DatabaseSync) {
             UNIQUE (subscription_id, kind, question_id)
         );
         CREATE INDEX IF NOT EXISTS questions_by_game_created ON questions(game_id, created_at);
-        CREATE UNIQUE INDEX IF NOT EXISTS one_pending_question_per_seeker
-            ON questions(game_id, sender_player_id) WHERE status = 'pending';
+        DROP INDEX IF EXISTS one_pending_question_per_seeker;
         CREATE INDEX IF NOT EXISTS pending_push_deliveries ON push_deliveries(status, next_attempt_at);
     `);
 
@@ -377,6 +389,7 @@ function migrate(db: DatabaseSync) {
             row.id,
         );
     }
+    ensurePendingQuestionIndex(db);
 }
 
 function errorReply(reply: any, status: number, code: string, message: string) {
@@ -880,16 +893,16 @@ export async function buildApp(
         try {
             const pending = db
                 .prepare(
-                    "SELECT id FROM questions WHERE game_id = ? AND sender_player_id = ? AND status = 'pending' LIMIT 1",
+                    "SELECT id FROM questions WHERE game_id = ? AND status = 'pending' LIMIT 1",
                 )
-                .get(game.id, player.id);
+                .get(game.id);
             if (pending) {
                 db.exec("ROLLBACK");
                 return errorReply(
                     reply,
                     409,
                     "PENDING_QUESTION_EXISTS",
-                    "Wait for your pending question to be answered before sending another",
+                    "Wait for the pending question to be answered before sending another",
                 );
             }
             db.prepare(
@@ -1001,6 +1014,7 @@ export async function buildApp(
                 db.exec("ROLLBACK");
                 throw error;
             }
+            ensurePendingQuestionIndex(db);
 
             io.to(`game:${game.id}`).emit("question:removed", {
                 questionId: question.id,
@@ -1250,6 +1264,7 @@ export async function buildApp(
                 await unlink(storagePath).catch(() => undefined);
                 throw error;
             }
+            ensurePendingQuestionIndex(db);
             question.status = "answered";
             const resource = questionResource(question);
             io.to(`game:${game.id}`).emit("question:answered", resource);
@@ -1410,6 +1425,7 @@ export async function buildApp(
                 db.exec("ROLLBACK");
                 throw error;
             }
+            ensurePendingQuestionIndex(db);
             question.status = "answered";
             const resource = questionResource(question);
             io.to(`game:${game.id}`).emit("question:answered", resource);

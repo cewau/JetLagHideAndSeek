@@ -256,7 +256,7 @@ export function MultiplayerPanel() {
         <div className="pointer-events-none absolute inset-x-0 top-2.5 z-[1040] flex justify-center font-poppins">
             <Button
                 type="button"
-                className="pointer-events-auto h-10 gap-2 bg-slate-900/95 px-3 text-white shadow-lg"
+                className="pointer-events-auto h-10 gap-2 !bg-black px-3 text-white shadow-lg hover:!bg-black"
                 onClick={() => setOpen(true)}
                 aria-label={
                     session

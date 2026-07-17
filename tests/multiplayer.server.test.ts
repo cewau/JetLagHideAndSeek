@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 
 import sharp from "sharp";
 import { io as ioClient, type Socket } from "socket.io-client";
@@ -461,7 +462,7 @@ describe("multiplayer server", () => {
         }
     });
 
-    it("rejects a second pending question from the same seeker until the first is answered", async () => {
+    it("rejects a second pending question from any seeker until the first is answered", async () => {
         const app = await buildApp({ databasePath: ":memory:" });
         apps.push(app);
         const { game, player: hider } = await injectJson(
@@ -475,6 +476,12 @@ describe("multiplayer server", () => {
             "POST",
             `/api/games/${game.code}/join`,
             { name: "Pending Seeker", role: "seeker" },
+        );
+        const { player: otherSeeker } = await injectJson(
+            app,
+            "POST",
+            `/api/games/${game.code}/join`,
+            { name: "Other Seeker", role: "seeker" },
         );
         const first = await injectJson(
             app,
@@ -508,7 +515,7 @@ describe("multiplayer server", () => {
             method: "POST",
             url: `/api/games/${game.code}/questions`,
             payload: {
-                playerId: seeker.id,
+                playerId: otherSeeker.id,
                 clientQuestionKey: secondQuestion.key,
                 question: secondQuestion,
             },
@@ -529,7 +536,7 @@ describe("multiplayer server", () => {
             method: "POST",
             url: `/api/games/${game.code}/questions`,
             payload: {
-                playerId: seeker.id,
+                playerId: otherSeeker.id,
                 clientQuestionKey: secondQuestion.key,
                 question: secondQuestion,
             },
@@ -682,6 +689,106 @@ describe("multiplayer server", () => {
         }
     });
 
+    it("migrates legacy per-seeker pending rows without discarding questions", async () => {
+        const directory = mkdtempSync(join(tmpdir(), "jetlag-legacy-pending-"));
+        const databasePath = join(directory, "game.db");
+        const legacyDb = new DatabaseSync(databasePath);
+        legacyDb.exec(`
+            PRAGMA foreign_keys = ON;
+            CREATE TABLE games (
+                id TEXT PRIMARY KEY,
+                code TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE players (
+                id TEXT PRIMARY KEY,
+                game_id TEXT NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+                name TEXT NOT NULL COLLATE NOCASE,
+                role TEXT NOT NULL CHECK (role IN ('hider', 'seeker')),
+                joined_at TEXT NOT NULL,
+                UNIQUE (game_id, name)
+            );
+            CREATE TABLE questions (
+                id TEXT PRIMARY KEY,
+                game_id TEXT NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+                sender_player_id TEXT NOT NULL REFERENCES players(id),
+                client_question_key REAL NOT NULL,
+                question_json TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'answered')),
+                created_at TEXT NOT NULL,
+                answer_due_at TEXT NOT NULL,
+                UNIQUE (sender_player_id, client_question_key)
+            );
+            CREATE UNIQUE INDEX one_pending_question_per_seeker
+                ON questions(game_id, sender_player_id) WHERE status = 'pending';
+        `);
+        const timestamp = "2026-07-17T00:00:00.000Z";
+        legacyDb
+            .prepare("INSERT INTO games VALUES (?, ?, ?)")
+            .run("game", "ABC234", timestamp);
+        const insertPlayer = legacyDb.prepare(
+            "INSERT INTO players VALUES (?, ?, ?, ?, ?)",
+        );
+        const seekerOneId = "00000000-0000-4000-8000-000000000001";
+        const seekerTwoId = "00000000-0000-4000-8000-000000000002";
+        insertPlayer.run(seekerOneId, "game", "One", "seeker", timestamp);
+        insertPlayer.run(seekerTwoId, "game", "Two", "seeker", timestamp);
+        const insertQuestion = legacyDb.prepare(
+            "INSERT INTO questions VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)",
+        );
+        insertQuestion.run(
+            "question-one",
+            "game",
+            seekerOneId,
+            1,
+            JSON.stringify({ ...radiusQuestion, key: 1 }),
+            timestamp,
+            timestamp,
+        );
+        insertQuestion.run(
+            "question-two",
+            "game",
+            seekerTwoId,
+            2,
+            JSON.stringify({ ...radiusQuestion, key: 2 }),
+            timestamp,
+            timestamp,
+        );
+        legacyDb.close();
+
+        let app: Awaited<ReturnType<typeof buildApp>> | null = null;
+        try {
+            app = await buildApp({ databasePath });
+            const snapshot = await app.inject({
+                method: "GET",
+                url: "/api/games/ABC234/snapshot",
+            });
+            expect(snapshot.statusCode).toBe(200);
+            expect(snapshot.json().questions).toHaveLength(2);
+
+            const unasked = await app.inject({
+                method: "DELETE",
+                url: "/api/games/ABC234/questions/question-two",
+                payload: { playerId: seekerTwoId },
+            });
+            expect(unasked.statusCode).toBe(200);
+            await app.close();
+            app = null;
+
+            const migratedDb = new DatabaseSync(databasePath);
+            const gameWideIndex = migratedDb
+                .prepare(
+                    "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'one_pending_question_per_game'",
+                )
+                .get();
+            migratedDb.close();
+            expect(gameWideIndex).toBeTruthy();
+        } finally {
+            if (app) await app.close();
+            rmSync(directory, { recursive: true, force: true });
+        }
+    });
+
     it("emits an initial snapshot and committed questions over Socket.IO", async () => {
         const app = await buildApp({ databasePath: ":memory:" });
         apps.push(app);
@@ -691,22 +798,43 @@ describe("multiplayer server", () => {
             "/api/games",
             { name: "Socket Seeker", role: "seeker" },
         );
+        const { player: observer } = await injectJson(
+            app,
+            "POST",
+            `/api/games/${game.code}/join`,
+            { name: "Socket Observer", role: "seeker" },
+        );
         const address = await app.listen({ host: "127.0.0.1", port: 0 });
         let client: Socket | null = null;
+        let observerClient: Socket | null = null;
         try {
             client = ioClient(address, {
                 path: "/socket.io",
                 query: { gameCode: game.code, playerId: seeker.id },
                 transports: ["websocket"],
             });
-            const initial = await new Promise<any>((resolve, reject) => {
-                client!.once("game:snapshot", resolve);
-                client!.once("connect_error", reject);
+            observerClient = ioClient(address, {
+                path: "/socket.io",
+                query: { gameCode: game.code, playerId: observer.id },
+                transports: ["websocket"],
             });
+            const [initial, observerInitial] = await Promise.all(
+                [client, observerClient].map(
+                    (socket) =>
+                        new Promise<any>((resolve, reject) => {
+                            socket.once("game:snapshot", resolve);
+                            socket.once("connect_error", reject);
+                        }),
+                ),
+            );
             expect(initial.game.code).toBe(game.code);
+            expect(observerInitial.game.code).toBe(game.code);
 
-            const received = new Promise<any>((resolve) =>
-                client!.once("question:created", resolve),
+            const receivedBySeekers = [client, observerClient].map(
+                (socket) =>
+                    new Promise<any>((resolve) =>
+                        socket.once("question:created", resolve),
+                    ),
             );
             await injectJson(app, "POST", `/api/games/${game.code}/questions`, {
                 playerId: seeker.id,
@@ -714,12 +842,17 @@ describe("multiplayer server", () => {
                 question: { ...radiusQuestion, key: 777 },
             });
 
-            await expect(received).resolves.toMatchObject({
-                clientQuestionKey: 777,
-                status: "pending",
-            });
+            const receivedQuestions = await Promise.all(receivedBySeekers);
+            expect(receivedQuestions).toHaveLength(2);
+            for (const received of receivedQuestions) {
+                expect(received).toMatchObject({
+                    clientQuestionKey: 777,
+                    status: "pending",
+                });
+            }
         } finally {
             client?.disconnect();
+            observerClient?.disconnect();
         }
     });
 
