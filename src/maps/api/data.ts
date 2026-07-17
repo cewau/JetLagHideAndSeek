@@ -13,6 +13,31 @@ export const airports: FeatureCollection<Point> = {
             properties: { name: "Seletar Airport" },
             geometry: { type: "Point", coordinates: [103.8671796, 1.4152511] },
         },
+        {
+            type: "Feature",
+            properties: { name: "Tengah Airbase" },
+            geometry: { type: "Point", coordinates: [1.3873477, 103.7099255] },
+        },
+        {
+            type: "Feature",
+            properties: { name: "Sembawang Airbase" },
+            geometry: { type: "Point", coordinates: [1.4291934, 103.8103754] },
+        },
+        {
+            type: "Feature",
+            properties: { name: "Paya Lebar Airbase" },
+            geometry: { type: "Point", coordinates: [1.3593987, 103.9117438] },
+        },
+        {
+            type: "Feature",
+            properties: { name: "Changi Airbase West" },
+            geometry: { type: "Point", coordinates: [1.3795473, 103.9843704] },
+        },
+        {
+            type: "Feature",
+            properties: { name: "Changi Airbase East" },
+            geometry: { type: "Point", coordinates: [1.3398662, 104.0111786] },
+        },
     ],
 };
 

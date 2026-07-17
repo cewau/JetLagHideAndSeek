@@ -195,7 +195,7 @@ const ordinaryMatchingQuestionSchema = baseMatchingQuestionSchema.extend({
         .union([
             z
                 .literal("airport")
-                .describe("Commercial Airport In Zone Question"),
+                .describe("Airport In Zone Question"),
             z.literal("mountain").describe("Mountain Peak Question"),
             z.literal("university").describe("University Question"),
 
@@ -314,7 +314,7 @@ const ordinaryMeasuringQuestionSchema = baseMeasuringQuestionSchema.extend({
             z.literal("coastline").describe("Coastline Question"),
             z
                 .literal("airport")
-                .describe("Commercial Airport In Zone Question"),
+                .describe("Airport In Zone Question"),
             z
                 .literal("international_borders")
                 .describe("International Border Question"),
