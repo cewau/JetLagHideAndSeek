@@ -246,6 +246,54 @@ export const fetchElectoralBoundaries = async () => {
     return data;
 };
 
+export const fetchExpressways = async () => {
+    const response = await cacheFetch(
+        "/Expressways.geojson",
+        "Fetching expressway data...",
+        CacheType.PERMANENT_CACHE,
+    );
+    const data = await response.json();
+    return data as FeatureCollection;
+};
+
+export const nearestExpresswayToPoint = async (
+    latitude: number,
+    longitude: number,
+) => {
+    const expressways = await fetchExpressways();
+    const point = turf.point([longitude, latitude]);
+    let nearestFeature: any = null;
+    let nearestPoint: any = null;
+    let nearestDistance = Infinity;
+
+    for (const feature of expressways.features) {
+        if (
+            !feature.geometry ||
+            (feature.geometry.type !== "LineString" &&
+                feature.geometry.type !== "MultiLineString")
+        ) {
+            continue;
+        }
+
+        const snappedPoint = turf.nearestPointOnLine(feature as any, point, {
+            units: "kilometers",
+        });
+        const distance = snappedPoint.properties?.dist;
+
+        if (typeof distance === "number" && distance < nearestDistance) {
+            nearestDistance = distance;
+            nearestFeature = feature;
+            nearestPoint = snappedPoint;
+        }
+    }
+
+    if (!nearestFeature || !nearestPoint) return null;
+
+    return turf.point(nearestPoint.geometry.coordinates, {
+        ...nearestFeature.properties,
+        distanceToPoint: nearestDistance,
+    });
+};
 
 export const fetchLibraries = async () => {
     const response = await cacheFetch("/Libraries.geojson",
