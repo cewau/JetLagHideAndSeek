@@ -1,5 +1,12 @@
 import * as turf from "@turf/turf";
-import type { FeatureCollection, MultiPolygon } from "geojson";
+import type {
+    Feature,
+    FeatureCollection,
+    LineString,
+    MultiLineString,
+    MultiPolygon,
+    Point,
+} from "geojson";
 import _ from "lodash";
 import osmtogeojson from "osmtogeojson";
 
@@ -11,8 +18,19 @@ import { getLineNamesForStationName, loadSgmrt } from "@/maps/api/sgmrt";
 import { safeUnion } from "@/maps/geo-utils";
 
 import { cacheFetch } from "./cache";
-import { ELECTORAL_BOUNDARY_GEOJSON,LOCATION_FIRST_TAG, OVERPASS_API } from "./constants";
-import { airports, golf_courses, international_borders, mountains, universities, reservoirs } from "./data";
+import {
+    ELECTORAL_BOUNDARY_GEOJSON,
+    LOCATION_FIRST_TAG,
+    OVERPASS_API,
+} from "./constants";
+import {
+    airports,
+    golf_courses,
+    international_borders,
+    mountains,
+    reservoirs,
+    universities,
+} from "./data";
 import type {
     EncompassingTentacleQuestionSchema,
     HomeGameMatchingQuestions,
@@ -246,40 +264,58 @@ export const fetchElectoralBoundaries = async () => {
     return data;
 };
 
-export const fetchExpressways = async () => {
-    const response = await cacheFetch(
-        "/Expressways.geojson",
-        "Fetching expressway data...",
-        CacheType.PERMANENT_CACHE,
-    );
-    const data = await response.json();
-    return data as FeatureCollection;
+type ExpresswayLine = LineString | MultiLineString;
+
+type ExpresswayData = {
+    collection: FeatureCollection;
+    lines: FeatureCollection<ExpresswayLine>;
+    index: ReturnType<typeof turf.geojsonRbush>;
 };
 
-export const nearestExpresswayToPoint = async (
-    latitude: number,
-    longitude: number,
+let expresswayDataPromise: Promise<ExpresswayData> | undefined;
+
+const loadExpresswayData = () => {
+    if (!expresswayDataPromise) {
+        expresswayDataPromise = (async () => {
+            const response = await cacheFetch(
+                "/Expressways.geojson",
+                "Fetching expressway data...",
+                CacheType.PERMANENT_CACHE,
+            );
+            const collection = (await response.json()) as FeatureCollection;
+            const lineFeatures = collection.features.filter(
+                (feature): feature is Feature<ExpresswayLine> =>
+                    feature.geometry?.type === "LineString" ||
+                    feature.geometry?.type === "MultiLineString",
+            );
+            const lines = turf.featureCollection(lineFeatures);
+            const index = turf.geojsonRbush();
+            index.load(lines);
+            return { collection, lines, index };
+        })().catch((error) => {
+            expresswayDataPromise = undefined;
+            throw error;
+        });
+    }
+    return expresswayDataPromise;
+};
+
+export const fetchExpressways = async () =>
+    (await loadExpresswayData()).collection;
+
+const nearestExpresswayCandidate = (
+    features: Feature<ExpresswayLine>[],
+    point: Feature<Point>,
 ) => {
-    const expressways = await fetchExpressways();
-    const point = turf.point([longitude, latitude]);
-    let nearestFeature: any = null;
-    let nearestPoint: any = null;
+    let nearestFeature: Feature<ExpresswayLine> | null = null;
+    let nearestPoint: ReturnType<typeof turf.nearestPointOnLine> | null = null;
     let nearestDistance = Infinity;
 
-    for (const feature of expressways.features) {
-        if (
-            !feature.geometry ||
-            (feature.geometry.type !== "LineString" &&
-                feature.geometry.type !== "MultiLineString")
-        ) {
-            continue;
-        }
-
-        const snappedPoint = turf.nearestPointOnLine(feature as any, point, {
+    for (const feature of features) {
+        const snappedPoint = turf.nearestPointOnLine(feature, point, {
             units: "kilometers",
         });
         const distance = snappedPoint.properties?.dist;
-
         if (typeof distance === "number" && distance < nearestDistance) {
             nearestDistance = distance;
             nearestFeature = feature;
@@ -287,12 +323,58 @@ export const nearestExpresswayToPoint = async (
         }
     }
 
-    if (!nearestFeature || !nearestPoint) return null;
+    return { nearestFeature, nearestPoint, nearestDistance };
+};
 
-    return turf.point(nearestPoint.geometry.coordinates, {
-        ...nearestFeature.properties,
-        distanceToPoint: nearestDistance,
+const expresswayCandidatesWithin = (
+    data: ExpresswayData,
+    point: Feature<Point>,
+    radiusKilometers: number,
+) => {
+    const searchArea = turf.buffer(point, radiusKilometers, {
+        units: "kilometers",
     });
+    if (!searchArea) return [];
+    return data.index.search(turf.bbox(searchArea)).features as Feature<
+        ExpresswayLine
+    >[];
+};
+
+export const nearestExpresswayToPoint = async (
+    latitude: number,
+    longitude: number,
+) => {
+    const data = await loadExpresswayData();
+    const point = turf.point([longitude, latitude]);
+    let searchRadius = 0.5;
+    let candidates: Feature<ExpresswayLine>[] = [];
+
+    while (candidates.length === 0 && searchRadius <= 64) {
+        candidates = expresswayCandidatesWithin(data, point, searchRadius);
+        if (candidates.length === 0) searchRadius *= 2;
+    }
+    if (candidates.length === 0) candidates = data.lines.features;
+
+    let nearest = nearestExpresswayCandidate(candidates, point);
+    if (
+        candidates !== data.lines.features &&
+        nearest.nearestDistance > searchRadius
+    ) {
+        candidates = expresswayCandidatesWithin(
+            data,
+            point,
+            nearest.nearestDistance,
+        );
+        nearest = nearestExpresswayCandidate(candidates, point);
+    }
+
+    if (!nearest.nearestFeature || !nearest.nearestPoint) return null;
+
+    const properties: Record<string, unknown> = {
+        ...(nearest.nearestFeature.properties ?? {}),
+        distanceToPoint: nearest.nearestDistance,
+    };
+    return turf.point(nearest.nearestPoint.geometry.coordinates, properties);
 };
 
 export const fetchLibraries = async () => {
