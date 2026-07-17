@@ -21,7 +21,7 @@ A rootless container runtime can be used if its account can read the repository 
 
 ```bash
 git clone --branch feat/map-jro-sg-deployment \
-  https://github.com/junron/JetLagHideAndSeek.git
+  https://github.com/hermes-jro/JetLagHideAndSeek.git
 cd JetLagHideAndSeek
 corepack enable
 corepack prepare pnpm@10.34.5 --activate
